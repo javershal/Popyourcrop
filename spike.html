@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Daily Crop — Share Spike</title>
+<style>
+  :root {
+    --bg: #111; --fg: #eee; --dim: #888;
+    --ok: #4ade80; --bad: #f87171; --warn: #fbbf24;
+    --card: #1c1c1c; --line: #2e2e2e;
+  }
+  * { box-sizing: border-box; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; padding: 16px calc(16px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 24px 0 8px; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { color: var(--dim); padding-right: 12px; white-space: nowrap; }
+  td:last-child { text-align: right; font-family: ui-monospace, Menlo, monospace; word-break: break-word; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .banner { border-radius: 10px; padding: 12px; margin: 12px 0; font-weight: 600; font-size: 14px; }
+  .banner.ok { background: #0f2a1a; border: 1px solid #1f5133; color: var(--ok); }
+  .banner.bad { background: #2a0f0f; border: 1px solid #5c2222; color: var(--bad); }
+  button {
+    display: block; width: 100%; min-height: 52px; margin: 8px 0;
+    background: #2563eb; color: #fff; border: 0; border-radius: 10px;
+    font: 600 16px/1.2 inherit; padding: 12px 14px; cursor: pointer;
+    -webkit-appearance: none; touch-action: manipulation;
+  }
+  button:disabled { background: #333; color: #777; }
+  button small { display: block; font-weight: 400; font-size: 12px; opacity: .8; margin-top: 3px; }
+  #log {
+    background: #000; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px; font: 12px/1.5 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word; min-height: 80px; max-height: 45vh; overflow-y: auto;
+  }
+  #preview { max-width: 100%; border-radius: 8px; display: block; margin-top: 8px;
+    -webkit-touch-callout: default; /* long-press-to-save must work here (fallback #3) */ }
+  a.dl { display: block; text-align: center; padding: 14px; color: #7aa2f7; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<h1>Daily Crop — Share Spike</h1>
+<p class="sub">§7.3. Run this on the real device, over the HTTPS tunnel. Results over <code>file://</code> or a LAN IP are false negatives.</p>
+
+<div id="verdict" class="banner">checking environment…</div>
+
+<h2>Environment</h2>
+<div class="card"><table id="caps"></table></div>
+
+<h2>Share paths</h2>
+<button id="b1" disabled>1 · navigator.share({files})<small>files only — no title, no text</small></button>
+<button id="b2" disabled>2 · clipboard.write(image/png)<small>ClipboardItem, single representation</small></button>
+<button id="b3" disabled>3 · Long-press / download<small>renders below for manual attach</small></button>
+
+<h2>Log</h2>
+<div id="log">…</div>
+
+<h2>Test image</h2>
+<p class="sub">Long-press this to save (fallback #3). Watermark must stay legible after the messaging app recompresses it.</p>
+<img id="preview" alt="test crop output">
+<a class="dl" id="dl" download="daily-crop-spike.png">↓ download instead</a>
+
+<script>
+(function () {
+  'use strict';
+
+  var logEl = document.getElementById('log');
+  var lines = [];
+  function log(msg, cls) {
+    var t = new Date().toISOString().slice(11, 19);
+    lines.push('<span class="' + (cls || '') + '">' + t + '  ' + String(msg).replace(/[<>&]/g, function (c) {
+      return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c];
+    }) + '</span>');
+    logEl.innerHTML = lines.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ---------- 1. Build the test artifact -------------------------------
+  // Canvas drawn from scratch, so nothing is tainted and this mirrors the
+  // real render path in §7.2: watermark burned into the pixels.
+  var W = 1200, H = 900;
+  var cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  var g = cv.getContext('2d');
+
+  var grd = g.createLinearGradient(0, 0, W, H);
+  grd.addColorStop(0, '#2b4c7e'); grd.addColorStop(1, '#c0562f');
+  g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(255,255,255,.28)'; g.lineWidth = 2;
+  for (var i = 1; i < 12; i++) {
+    g.beginPath(); g.moveTo(i * W / 12, 0); g.lineTo(i * W / 12, H); g.stroke();
+    g.beginPath(); g.moveTo(0, i * H / 12); g.lineTo(W, i * H / 12); g.stroke();
+  }
+  g.fillStyle = '#fff';
+  g.font = '600 64px -apple-system, system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('SPIKE', W / 2, H / 2 - 30);
+  g.font = '400 30px -apple-system, system-ui, sans-serif';
+  g.fillText(new Date().toISOString().slice(0, 19).replace('T', ' '), W / 2, H / 2 + 40);
+
+  // Burned-in watermark — sized relative to output so it survives recompression.
+  var wm = Math.round(H * 0.042);
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = 'rgba(0,0,0,.45)';
+  g.fillRect(0, H - wm * 2.4, W, wm * 2.4);
+  g.fillStyle = '#fff';
+  g.font = '700 ' + wm + 'px -apple-system, system-ui, sans-serif';
+  g.fillText('DAILY CROP', wm * 0.7, H - wm * 1.15);
+  g.font = '400 ' + Math.round(wm * 0.78) + 'px -apple-system, system-ui, sans-serif';
+  g.fillStyle = 'rgba(255,255,255,.85)';
+  g.fillText(location.host || 'dailycrop.example', wm * 0.7, H - wm * 0.35);
+
+  var blob = null, file = null;
+
+  function makeBlob() {
+    return new Promise(function (res, rej) {
+      try {
+        cv.toBlob(function (b) { b ? res(b) : rej(new Error('toBlob returned null')); }, 'image/png');
+      } catch (e) { rej(e); }
+    });
+  }
+
+  // ---------- 2. Capability readout ------------------------------------
+  function row(k, v, cls) {
+    var tr = document.createElement('tr');
+    var a = document.createElement('td'); a.textContent = k;
+    var b = document.createElement('td'); b.textContent = v; if (cls) b.className = cls;
+    tr.appendChild(a); tr.appendChild(b);
+    document.getElementById('caps').appendChild(tr);
+  }
+  function yn(v) { return v ? 'ok' : 'bad'; }
+
+  var secure = window.isSecureContext === true;
+
+  row('isSecureContext', String(window.isSecureContext), yn(secure));
+  row('origin', location.origin);
+  row('protocol', location.protocol, location.protocol === 'https:' ? 'ok' : 'warn');
+  row('navigator.share', typeof navigator.share, yn(typeof navigator.share === 'function'));
+  row('navigator.canShare', typeof navigator.canShare, yn(typeof navigator.canShare === 'function'));
+  row('navigator.clipboard', typeof navigator.clipboard, yn(!!navigator.clipboard));
+  row('clipboard.write', navigator.clipboard ? typeof navigator.clipboard.write : 'n/a', yn(navigator.clipboard && navigator.clipboard.write));
+  row('ClipboardItem', typeof window.ClipboardItem, yn(typeof window.ClipboardItem !== 'undefined'));
+  row('canvas.toBlob', typeof cv.toBlob, yn(typeof cv.toBlob === 'function'));
+  row('devicePixelRatio', String(window.devicePixelRatio));
+  row('screen', window.innerWidth + '×' + window.innerHeight);
+  row('UA', navigator.userAgent);
+
+  var verdict = document.getElementById('verdict');
+  if (!secure) {
+    verdict.className = 'banner bad';
+    verdict.textContent = '✕ NOT a secure context — share and clipboard results here are FALSE NEGATIVES. Serve over the HTTPS tunnel before trusting anything below (§7.3).';
+    log('Insecure context. Both APIs may be undefined regardless of real support.', 'bad');
+  } else {
+    verdict.className = 'banner ok';
+    verdict.textContent = '✓ Secure context — results below are trustworthy.';
+    log('Secure context confirmed. Proceed.', 'ok');
+  }
+
+  // ---------- 3. Wire the three paths ----------------------------------
+  var b1 = document.getElementById('b1'), b2 = document.getElementById('b2'), b3 = document.getElementById('b3');
+
+  makeBlob().then(function (b) {
+    blob = b;
+    file = new File([b], 'daily-crop.png', { type: 'image/png' });
+    log('artifact ready: ' + Math.round(b.size / 1024) + ' KB png, ' + W + '×' + H, 'ok');
+
+    var url = URL.createObjectURL(b);
+    document.getElementById('preview').src = url;
+    document.getElementById('dl').href = url;
+
+    if (typeof navigator.canShare === 'function') {
+      var cs = navigator.canShare({ files: [file] });
+      row('canShare({files})', String(cs), yn(cs));
+      log('navigator.canShare({files:[file]}) → ' + cs, cs ? 'ok' : 'warn');
+    }
+    b1.disabled = typeof navigator.share !== 'function';
+    b2.disabled = !(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem);
+    b3.disabled = false;
+    if (b1.disabled) log('path 1 unavailable: navigator.share is not a function', 'bad');
+    if (b2.disabled) log('path 2 unavailable: clipboard.write or ClipboardItem missing', 'bad');
+  }).catch(function (e) {
+    log('FATAL: could not produce a blob — ' + e.name + ': ' + e.message, 'bad');
+    log('If this is a SecurityError the canvas is tainted (§4). Nothing downstream can work.', 'bad');
+  });
+
+  // Path 1 — files only. No title, no text (§7.1).
+  b1.addEventListener('click', function () {
+    log('path 1: navigator.share({files:[file]}) …');
+    var t0 = Date.now();
+    Promise.resolve()
+      .then(function () { return navigator.share({ files: [file] }); })
+      .then(function () {
+        log('path 1 RESOLVED after ' + (Date.now() - t0) + 'ms', 'ok');
+        log('→ resolve ≠ delivered. Check the image actually landed in the thread.', 'warn');
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') log('path 1 aborted by user (sheet dismissed) — not a failure', 'warn');
+        else log('path 1 FAILED — ' + (e && e.name) + ': ' + (e && e.message), 'bad');
+      });
+  });
+
+  // Path 2 — clipboard. Safari requires the write to originate in the gesture
+  // task, so hand ClipboardItem the Promise<Blob> rather than awaiting first.
+  b2.addEventListener('click', function () {
+    log('path 2: clipboard.write([ClipboardItem]) …');
+    var t0 = Date.now();
+    try {
+      var item = new ClipboardItem({ 'image/png': blob ? Promise.resolve(blob) : makeBlob() });
+      navigator.clipboard.write([item]).then(function () {
+        log('path 2 RESOLVED after ' + (Date.now() - t0) + 'ms', 'ok');
+        log('→ now paste into Messages and confirm the image arrives.', 'warn');
+      }).catch(function (e) {
+        log('path 2 FAILED — ' + (e && e.name) + ': ' + (e && e.message), 'bad');
+        log('retrying with an awaited blob (non-gesture write) …');
+        makeBlob().then(function (b) {
+          return navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]);
+        }).then(function () {
+          log('path 2 retry RESOLVED — awaited-blob form works, promise form does not', 'ok');
+        }).catch(function (e2) {
+          log('path 2 retry FAILED — ' + (e2 && e2.name) + ': ' + (e2 && e2.message), 'bad');
+        });
+      });
+    } catch (e) {
+      log('path 2 THREW synchronously — ' + e.name + ': ' + e.message, 'bad');
+    }
+  });
+
+  // Path 3 — manual.
+  b3.addEventListener('click', function () {
+    log('path 3: image rendered below. Long-press → Save Image, or use the download link.', 'ok');
+    log('→ confirm the save sheet appears at all; WebKit suppresses it in some contexts.', 'warn');
+    document.getElementById('preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  window.addEventListener('error', function (e) { log('window error: ' + e.message, 'bad'); });
+  window.addEventListener('unhandledrejection', function (e) {
+    log('unhandled rejection: ' + (e.reason && (e.reason.name + ': ' + e.reason.message)), 'bad');
+  });
+})();
+</script>
+</body>
+</html>
