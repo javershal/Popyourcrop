@@ -43,6 +43,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cp "$DIST/index.html" "$TMP/index.html"
+# The share spike needs a secure context to produce a valid result (§7.3), and
+# Pages is the only HTTPS origin we have -- so it ships alongside the app.
+[ -f "$ROOT/spike/spike.html" ] && cp "$ROOT/spike/spike.html" "$TMP/spike.html"
 # Pages otherwise runs the tree through Jekyll, which is pure latency here.
 : > "$TMP/.nojekyll"
 
