@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Daily Crop</title>
+<style>
+  :root {
+    --app-h: 100vh;
+    --bg: #0b0b0c;
+    --fg: #f2f2f3;
+    --dim: #8a8a90;
+    --line: #26262a;
+    --accent: #f2f2f3;
+    --scrim: rgba(0,0,0,.62);
+  }
+  @supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    /* §5.1 — stop Safari's own scroll/zoom from firing under the gesture */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { overflow: hidden; }
+
+  #app {
+    position: relative;
+    height: var(--app-h);
+    display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* ---- header: day label only. No prompt, no score, no objective (§1) ---- */
+  header {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    height: 44px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--dim); position: relative;
+  }
+  #devHot { position: absolute; top: 0; right: 0; width: 64px; height: 44px; }
+
+  /* ---- stage: fixed frame, moving image (§5) ---- */
+  #stage {
+    flex: 1 1 auto; position: relative; overflow: hidden;
+    touch-action: none;                 /* §5.1 */
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;        /* no save-sheet mid-crop */
+    cursor: grab;
+  }
+  #stage.dragging { cursor: grabbing; }
+
+  #photo {
+    position: absolute; top: 0; left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+    -webkit-user-drag: none; user-drag: none;
+    pointer-events: none;
+  }
+
+  #frame {
+    position: absolute; pointer-events: none;
+    box-shadow: 0 0 0 9999px var(--scrim);
+    outline: 1px solid rgba(255,255,255,.9);
+  }
+  #frame::before, #frame::after,
+  #frame i::before, #frame i::after {
+    content: ""; position: absolute; background: rgba(255,255,255,.85);
+    opacity: 0; transition: opacity .22s ease;
+  }
+  #frame.active::before, #frame.active::after,
+  #frame.active i::before, #frame.active i::after { opacity: .55; }
+  /* rule of thirds (§5.1) */
+  #frame::before { left: 33.333%; top: 0; bottom: 0; width: 1px; }
+  #frame::after  { left: 66.666%; top: 0; bottom: 0; width: 1px; }
+  #frame i::before { top: 33.333%; left: 0; right: 0; height: 1px; }
+  #frame i::after  { top: 66.666%; left: 0; right: 0; height: 1px; }
+
+  /* ---- controls ---- */
+  footer {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    gap: 12px; padding: 14px 16px 18px; min-height: 76px;
+  }
+  button {
+    -webkit-appearance: none; appearance: none; border: 0; cursor: pointer;
+    font: 600 16px/1 inherit; border-radius: 999px;
+    min-height: 48px; padding: 0 26px;              /* ≥44px hit area (§5.1) */
+    background: var(--accent); color: #0b0b0c;
+    touch-action: manipulation;
+  }
+  button.ghost { background: transparent; color: var(--dim); box-shadow: inset 0 0 0 1px var(--line); }
+  button:disabled { opacity: .4; }
+
+  /* ---- result view ---- */
+  #result { display: none; flex: 1 1 auto; flex-direction: column; align-items: center;
+            justify-content: center; padding: 12px 16px; gap: 14px; overflow: auto; }
+  #result img {
+    max-width: 100%; max-height: 62vh; border-radius: 6px; display: block;
+    -webkit-touch-callout: default;   /* long-press-to-save IS share fallback #3 */
+  }
+  #shareNote { color: var(--dim); font-size: 13px; text-align: center; min-height: 18px; padding: 0 8px; }
+  #resultActions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+  /* ---- dev panel (§8) ---- */
+  #dev {
+    display: none; position: absolute; inset: 0; z-index: 20;
+    background: rgba(8,8,10,.96); overflow-y: auto;
+    padding: calc(12px + env(safe-area-inset-top)) 14px calc(24px + env(safe-area-inset-bottom));
+    font-size: 13px;
+  }
+  #dev h3 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+            color: var(--dim); margin: 18px 0 8px; font-weight: 600; }
+  #dev h3:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; flex-wrap: wrap; }
+  .row > label { flex: 0 0 96px; color: var(--dim); }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button { min-height: 36px; padding: 0 13px; font-size: 13px; font-weight: 500;
+                background: #1b1b1f; color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #0b0b0c; box-shadow: none; }
+  #dev input[type=range] { flex: 1 1 120px; }
+  #dev input[type=number], #dev input[type=date] {
+    background: #1b1b1f; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 10px; font: inherit; min-height: 38px; min-width: 0; flex: 1 1 90px;
+  }
+  .readout { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #000;
+             border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+             white-space: pre-wrap; word-break: break-word; }
+  #overlayWrap { position: relative; margin-top: 8px; display: none; }
+  #overlayWrap img { width: 100%; display: block; border-radius: 6px; opacity: .55; }
+  #overlayCv { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .warn { color: #fbbf24; }
+  .note { color: var(--dim); font-size: 12px; line-height: 1.5; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <span id="dayLabel"></span>
+    <div id="devHot" aria-hidden="true"></div>
+  </header>
+
+  <div id="stage">
+    <img id="photo" alt="">
+    <div id="frame"><i></i></div>
+  </div>
+
+  <div id="result">
+    <img id="resultImg" alt="your crop">
+    <div id="shareNote"></div>
+    <div id="resultActions">
+      <button id="shareBtn">Share</button>
+      <button id="redoBtn" class="ghost">Redo</button>
+    </div>
+  </div>
+
+  <footer id="cropControls">
+    <button id="confirmBtn">Confirm crop</button>
+  </footer>
+
+  <div id="dev"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* IMAGE_DATA_START */
+  // Replaced by tools/pack.py. This fallback keeps app.html openable on its own
+  // for markup work; it is a 2x2 grey pixel and will look broken, by design.
+  var DAY = {
+    id: '0000-00-00', w: 2, h: 2,
+    src: 'data:image/gif;base64,R0lGODlhAgACAIAAAKCgoP///yH5BAAAAAAALAAAAAACAAIAAAIDRAJZADs='
+  };
+  /* IMAGE_DATA_END */
+
+  // ------------------------------------------------------------------ config
+  // §7.2 — burned into the shared pixels. Text will not travel with the image
+  // (§7.1), so this is the ONLY re-entry path back into the game. Swap freely;
+  // it is deliberately the one string that needs changing when hosting moves.
+  var SITE_URL = 'javershal.github.io/Popyourcrop';
+  var WORDMARK = 'DAILY CROP';
+
+  var CFG = {
+    minOutPx: 900,      // §5.3 — max zoom is capped by output resolution, not a multiplier
+    outLongEdge: 1600,  // shared artifact size
+    friction: 0.94,     // momentum decay per 60fps frame
+    rubber: 180,        // px of pull before resistance really bites
+    springMs: 360,
+    aspect: 'source',   // 'source' | 1 | 4/3 | 3/2  (dev panel, §8)
+    areaPct: 0          // 0 = free; >0 pins crop area to this % of source (§8)
+  };
+
+  // --------------------------------------------------------------- utilities
+  function $(id) { return document.getElementById(id); }
+  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  // §6 — localStorage is unreliable under file:// (opaque origin) and can throw
+  // on access itself, so even the probe is wrapped. Falls back to memory; the
+  // consequence is the lock resets on reload, which is acceptable.
+  var store = (function () {
+    var mem = {}, live = false;
+    try {
+      var k = '__dc' + Math.round(performance.now());
+      window.localStorage.setItem(k, '1');
+      window.localStorage.removeItem(k);
+      live = true;
+    } catch (e) { live = false; }
+    return {
+      live: live,
+      get: function (k, d) {
+        try { var v = live ? localStorage.getItem(k) : mem[k];
+              return v == null ? d : JSON.parse(v); }
+        catch (e) { return d; }
+      },
+      set: function (k, v) {
+        try { var s = JSON.stringify(v); if (live) localStorage.setItem(k, s); else mem[k] = s; }
+        catch (e) { try { mem[k] = JSON.stringify(v); } catch (e2) {} }
+      },
+      del: function (k) {
+        try { if (live) localStorage.removeItem(k); else delete mem[k]; } catch (e) {}
+      }
+    };
+  })();
+
+  // §4 — IANA zone, never a fixed UTC offset: Pacific is UTC-8 for part of the
+  // year and UTC-7 for the rest, and offset math silently moves the rollover
+  // twice a year. Frozen at load and never re-read (a tab open across midnight
+  // keeps showing the day it loaded with, intentionally).
+  function pacificDay(d) {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(d || new Date());
+    } catch (e) {
+      var t = d || new Date();
+      return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') +
+             '-' + String(t.getDate()).padStart(2, '0');
+    }
+  }
+
+  var clockDay = pacificDay();
+  // One image per build, so a skewed clock cannot show a different photo than
+  // the group chat — it only shifts the label and the lock key. That is most of
+  // §4's open question defused by packaging rather than by a backend.
+  var dayId = DAY.id;
+  var clockSkew = (clockDay !== DAY.id);
+
+  var deviceId = store.get('dc:device', null);
+  if (!deviceId) {
+    deviceId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+      : 'dev-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    store.set('dc:device', deviceId);
+  }
+
+  // ------------------------------------------------------------------ state
+  var view = { scale: 1, tx: 0, ty: 0 };   // source px -> screen px
+  var frame = { x: 0, y: 0, w: 0, h: 0 };  // fixed rect in stage coords
+  var bounds = { min: 1, max: 1 };
+  var crop = null;                         // §5.2 — normalized, first-class
+  var confirmed = false;
+  var shownAt = 0, logged = false;
+
+  var photo = $('photo'), stage = $('stage'), frameEl = $('frame');
+
+  // ---------------------------------------------------------- geometry / fit
+  function frameAspect() {
+    if (CFG.aspect === 'source') return DAY.w / DAY.h;
+    return CFG.aspect;
+  }
+
+  function layout() {
+    var sw = stage.clientWidth, sh = stage.clientHeight;
+    if (!sw || !sh) return;
+    var pad = 18;
+    var availW = sw - pad * 2, availH = sh - pad * 2;
+    var a = frameAspect();
+    var fw = availW, fh = fw / a;
+    if (fh > availH) { fh = availH; fw = fh * a; }
+    frame.w = Math.round(fw); frame.h = Math.round(fh);
+    frame.x = Math.round((sw - frame.w) / 2);
+    frame.y = Math.round((sh - frame.h) / 2);
+    frameEl.style.left = frame.x + 'px';
+    frameEl.style.top = frame.y + 'px';
+    frameEl.style.width = frame.w + 'px';
+    frameEl.style.height = frame.h + 'px';
+    computeBounds();
+  }
+
+  function computeBounds() {
+    // min = fit-to-frame (§5.3). Cover, so the image always fills the frame;
+    // when frame aspect === source aspect the two terms are equal and the
+    // opening state is exactly the whole photo.
+    bounds.min = Math.max(frame.w / DAY.w, frame.h / DAY.h);
+    // max is capped by OUTPUT RESOLUTION, not a fixed multiplier (§5.3) —
+    // otherwise a player can zoom to a mushy crop and the shared image, which
+    // is the entire product, looks bad.
+    bounds.max = Math.min(frame.w, frame.h) / CFG.minOutPx;
+    if (bounds.max < bounds.min) bounds.max = bounds.min;   // tiny source: clamp, don't lock
+
+    if (CFG.areaPct > 0) {
+      // §8 — a pinned area is an exact scale. Flagged in the plan: this and the
+      // §5.3 resolution cap are the same kind of constraint arriving two ways;
+      // the explicit area setting wins and the cap degrades to a warning.
+      var s = Math.sqrt((frame.w * frame.h) / ((CFG.areaPct / 100) * DAY.w * DAY.h));
+      bounds.min = bounds.max = s;
+    }
+    view.scale = clamp(view.scale, bounds.min, bounds.max);
+    clampNow();
+  }
+
+  function txRange(s) { return [frame.x + frame.w - DAY.w * s, frame.x]; }
+  function tyRange(s) { return [frame.y + frame.h - DAY.h * s, frame.y]; }
+
+  function clampNow() {
+    var rx = txRange(view.scale), ry = tyRange(view.scale);
+    view.tx = clamp(view.tx, rx[0], rx[1]);
+    view.ty = clamp(view.ty, ry[0], ry[1]);
+    apply();
+  }
+
+  function center() {
+    view.scale = bounds.min;
+    view.tx = frame.x + (frame.w - DAY.w * view.scale) / 2;
+    view.ty = frame.y + (frame.h - DAY.h * view.scale) / 2;
+    apply();
+  }
+
+  // ------------------------------------------------------------- crop math
+  // §5.2 — with a fixed frame and a moving image the crop is a coordinate
+  // transform to INVERT, not a box to read off. The normalized rect below is
+  // first-class state; it is what feeds consensus stats later, and it is
+  // exactly the thing that becomes unrecoverable if the CSS transform is
+  // allowed to be the only representation.
+  function computeCrop() {
+    var s = view.scale;
+    var sx = (frame.x - view.tx) / s;
+    var sy = (frame.y - view.ty) / s;
+    var sw = frame.w / s;
+    var sh = frame.h / s;
+    var c = {
+      x: sx / DAY.w, y: sy / DAY.h,
+      width: sw / DAY.w, height: sh / DAY.h,
+      areaFraction: (sw * sh) / (DAY.w * DAY.h),
+      aspect: sw / sh,
+      scale: s
+    };
+    crop = c;
+    if (devOpen) paintReadout();
+    return c;
+  }
+
+  function apply() {
+    photo.style.transform =
+      'translate3d(' + view.tx + 'px,' + view.ty + 'px,0) scale(' + view.scale + ')';
+    computeCrop();
+  }
+
+  // --------------------------------------------------------- gesture engine
+  // Hand-rolled (see plan). Pointer Events give pinch+pan directly; what a
+  // library would have saved is the cheap half — the physics below is the part
+  // that costs, and no cropper ships the fixed-frame/moving-image model anyway.
+  var pointers = new Map();
+  var mode = 'idle';
+  var vx = 0, vy = 0, samples = [];
+  var pinch = null;
+  var rafId = 0, lastT = 0, springFrom = null, springTo = null, springT0 = 0;
+  var idleTimer = 0;
+
+  function overshoot(v, lo, hi) { return v < lo ? v - lo : v > hi ? v - hi : 0; }
+  function resist(over) { return 1 / (1 + Math.abs(over) / CFG.rubber); }
+
+  function setActive(on) {
+    frameEl.classList.toggle('active', on);
+    if (on) { clearTimeout(idleTimer); }
+    else { idleTimer = setTimeout(function () { frameEl.classList.remove('active'); }, 600); }
+  }
+
+  function mid() {
+    var xs = 0, ys = 0, n = 0;
+    pointers.forEach(function (p) { xs += p.x; ys += p.y; n++; });
+    return { x: xs / n, y: ys / n, n: n };
+  }
+  function spread() {
+    var pts = [];
+    pointers.forEach(function (p) { pts.push(p); });
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+
+  function localPt(e) {
+    var r = stage.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  stage.addEventListener('pointerdown', function (e) {
+    if (confirmed) return;
+    stage.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, localPt(e));
+    mode = 'drag';
+    stage.classList.add('dragging');
+    setActive(true);
+    vx = vy = 0; samples.length = 0;
+    if (pointers.size === 2) pinch = { d: spread(), m: mid(), s: view.scale };
+    e.preventDefault();
+  });
+
+  stage.addEventListener('pointermove', function (e) {
+    if (!pointers.has(e.pointerId)) return;
+    var prev = pointers.get(e.pointerId);
+    var now = localPt(e);
+    pointers.set(e.pointerId, now);
+
+    if (pointers.size >= 2) {
+      var d = spread(), m = mid();
+      if (pinch && pinch.d > 0) {
+        var target = pinch.s * (d / pinch.d);
+        // resist past the zoom stops rather than hard-stopping
+        var oS = overshoot(target, bounds.min, bounds.max);
+        if (oS) target = clamp(target, bounds.min, bounds.max) + oS * resist(oS * 40);
+        if (CFG.areaPct > 0) target = bounds.min;      // area pinned: zoom is off
+        zoomAbout(target, m.x, m.y);
+        // pan with the pinch midpoint too, so two-finger drag works while zooming
+        panBy(m.x - pinch.m.x, m.y - pinch.m.y);
+        pinch.m = m;
+      }
+    } else {
+      panBy(now.x - prev.x, now.y - prev.y);
+    }
+    sample(now);
+    e.preventDefault();
+  });
+
+  function endPointer(e) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    if (pointers.size === 1) {
+      // dropping from two fingers to one: re-baseline so it doesn't jump
+      pinch = null; samples.length = 0;
+    } else if (pointers.size === 0) {
+      stage.classList.remove('dragging');
+      setActive(false);
+      release();
+    }
+  }
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+
+  function panBy(dx, dy) {
+    var rx = txRange(view.scale), ry = tyRange(view.scale);
+    var ox = overshoot(view.tx, rx[0], rx[1]);
+    var oy = overshoot(view.ty, ry[0], ry[1]);
+    view.tx += dx * (ox ? resist(ox) : 1);
+    view.ty += dy * (oy ? resist(oy) : 1);
+    apply();
+  }
+
+  function zoomAbout(newScale, px, py) {
+    var k = newScale / view.scale;
+    view.tx = px - (px - view.tx) * k;
+    view.ty = py - (py - view.ty) * k;
+    view.scale = newScale;
+    apply();
+  }
+
+  function sample(p) {
+    var t = performance.now();
+    samples.push({ t: t, x: p.x, y: p.y });
+    while (samples.length > 6 || (samples.length > 2 && t - samples[0].t > 110)) samples.shift();
+  }
+
+  function release() {
+    var needSpring = outOfBounds();
+    if (!needSpring && samples.length >= 2) {
+      var a = samples[0], b = samples[samples.length - 1];
+      var dt = Math.max(1, b.t - a.t);
+      vx = (b.x - a.x) / dt * 16.67;
+      vy = (b.y - a.y) / dt * 16.67;
+      if (Math.hypot(vx, vy) > 0.6) { mode = 'momentum'; lastT = 0; loop(); return; }
+    }
+    if (needSpring) startSpring(); else mode = 'idle';
+  }
+
+  function outOfBounds() {
+    var rx = txRange(view.scale), ry = tyRange(view.scale);
+    return !!(overshoot(view.tx, rx[0], rx[1]) || overshoot(view.ty, ry[0], ry[1]) ||
+              overshoot(view.scale, bounds.min, bounds.max));
+  }
+
+  function startSpring() {
+    var s = clamp(view.scale, bounds.min, bounds.max);
+    // resolve scale first, then clamp translation against the settled scale so
+    // the image ends up exactly filling the frame (§5.1)
+    var rx = txRange(s), ry = tyRange(s);
+    springFrom = { tx: view.tx, ty: view.ty, scale: view.scale };
+    springTo = { tx: clamp(view.tx, rx[0], rx[1]), ty: clamp(view.ty, ry[0], ry[1]), scale: s };
+    springT0 = performance.now();
+    mode = 'spring';
+    loop();
+  }
+
+  function loop() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(function step(now) {
+      rafId = 0;
+      var dt = lastT ? Math.min(48, now - lastT) : 16.67;
+      lastT = now;
+
+      if (mode === 'momentum') {
+        var f = Math.pow(CFG.friction, dt / 16.67);
+        // stronger drag while past an edge, so a flick into the wall dies fast
+        var rx = txRange(view.scale), ry = tyRange(view.scale);
+        if (overshoot(view.tx, rx[0], rx[1])) vx *= 0.5;
+        if (overshoot(view.ty, ry[0], ry[1])) vy *= 0.5;
+        panBy(vx * dt / 16.67, vy * dt / 16.67);
+        vx *= f; vy *= f;
+        if (Math.hypot(vx, vy) < 0.25) {
+          lastT = 0;
+          if (outOfBounds()) { startSpring(); return; }
+          mode = 'idle'; return;
+        }
+      } else if (mode === 'spring') {
+        var t = clamp((now - springT0) / CFG.springMs, 0, 1);
+        var e = 1 - Math.pow(1 - t, 3);         // ease-out cubic
+        view.scale = springFrom.scale + (springTo.scale - springFrom.scale) * e;
+        view.tx = springFrom.tx + (springTo.tx - springFrom.tx) * e;
+        view.ty = springFrom.ty + (springTo.ty - springFrom.ty) * e;
+        apply();
+        if (t >= 1) { lastT = 0; mode = 'idle'; clampNow(); return; }
+      } else { lastT = 0; return; }
+
+      loop();
+    });
+  }
+
+  // Desktop convenience; not a target platform (§3) but keeps testing sane.
+  stage.addEventListener('wheel', function (e) {
+    if (confirmed || CFG.areaPct > 0) return;
+    e.preventDefault();
+    var p = localPt(e);
+    var k = Math.exp(-e.deltaY * 0.0016);
+    zoomAbout(clamp(view.scale * k, bounds.min, bounds.max), p.x, p.y);
+    setActive(true); setActive(false);
+  }, { passive: false });
+
+  // §5.1 — Safari's proprietary gesture events fire the page's own pinch-zoom
+  // underneath ours unless they are explicitly killed.
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (t) {
+    document.addEventListener(t, function (e) { e.preventDefault(); }, { passive: false });
+  });
+  document.addEventListener('dblclick', function (e) { e.preventDefault(); }, { passive: false });
+
+  // §3 — iOS Safari's collapsing address bar otherwise makes the crop surface
+  // jump mid-gesture. dvh handles most of it; visualViewport catches the rest.
+  function sizeApp() {
+    var h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    document.documentElement.style.setProperty('--app-h', h + 'px');
+    // Never re-lay-out with fingers down. visualViewport fires continuously
+    // while the address bar collapses, and re-deriving the frame mid-gesture
+    // re-clamps the transform under the user's hand — which reads as exactly
+    // the jump §3 warns about, just sourced from us instead of Safari.
+    if (pointers.size > 0) return;
+    layout();
+    if (mode === 'idle') clampNow();
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', sizeApp);
+    window.visualViewport.addEventListener('scroll', sizeApp);
+  }
+  window.addEventListener('resize', sizeApp);
+  window.addEventListener('orientationchange', function () { setTimeout(sizeApp, 260); });
+
+  // ------------------------------------------------------- render + watermark
+  function renderCrop(c) {
+    var sx = c.x * DAY.w, sy = c.y * DAY.h;
+    var sw = c.width * DAY.w, sh = c.height * DAY.h;
+    var scale = Math.min(1, CFG.outLongEdge / Math.max(sw, sh));
+    var ow = Math.max(1, Math.round(sw * scale)), oh = Math.max(1, Math.round(sh * scale));
+
+    var cv = document.createElement('canvas');
+    cv.width = ow; cv.height = oh;
+    var g = cv.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(photo, sx, sy, sw, sh, 0, 0, ow, oh);
+
+    // §7.2 — burned into the pixels. Text will not reliably travel alongside
+    // the image, so the wordmark and URL have to BE the image. Sized relative
+    // to output so it survives the messaging app's recompression.
+    var pad = Math.round(Math.min(ow, oh) * 0.035);
+    var big = Math.max(13, Math.round(Math.min(ow, oh) * 0.052));
+    var small = Math.max(11, Math.round(big * 0.72));
+    var barH = pad * 2 + big + small * 1.25;
+
+    var grd = g.createLinearGradient(0, oh - barH * 1.5, 0, oh);
+    grd.addColorStop(0, 'rgba(0,0,0,0)');
+    grd.addColorStop(1, 'rgba(0,0,0,.72)');
+    g.fillStyle = grd;
+    g.fillRect(0, oh - barH * 1.5, ow, barH * 1.5);
+
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillStyle = '#fff';
+    g.font = '700 ' + big + 'px -apple-system, Helvetica, Arial, sans-serif';
+    g.fillText(WORDMARK, pad, oh - pad - small * 1.15);
+    g.fillStyle = 'rgba(255,255,255,.92)';
+    g.font = '500 ' + small + 'px -apple-system, Helvetica, Arial, sans-serif';
+    g.fillText(SITE_URL, pad, oh - pad);
+
+    return cv;
+  }
+
+  function toBlob(cv) {
+    return new Promise(function (res, rej) {
+      try {
+        cv.toBlob(function (b) {
+          // A SecurityError/null here means the canvas was tainted — i.e. the
+          // image was NOT a data: URI (§4). Nothing downstream can recover.
+          b ? res(b) : rej(new Error('toBlob returned null (tainted canvas?)'));
+        }, 'image/png');
+      } catch (e) { rej(e); }
+    });
+  }
+
+  // ------------------------------------------------------------------ share
+  // §7.3 — runtime feature detection with graceful fallback, never UA sniffing.
+  // Order is the doc's preference order; each path falls through on throw.
+  var lastBlob = null, lastFile = null, lastUrl = null;
+
+  function note(msg) { $('shareNote').textContent = msg || ''; }
+
+  function share() {
+    if (!lastBlob) return;
+    if (!window.isSecureContext) {
+      note('Not a secure context — share and clipboard are unavailable here. Open the https:// link.');
+      return;
+    }
+    // If the File constructor was unavailable there is nothing to hand
+    // navigator.share — drop straight to the next path rather than no-oping.
+    var canShareFiles = !!lastFile && ((typeof navigator.canShare === 'function')
+      ? navigator.canShare({ files: [lastFile] }) : (typeof navigator.share === 'function'));
+
+    if (typeof navigator.share === 'function' && canShareFiles) {
+      // files ONLY — adding title/text has caused iOS to drop the image (§7.1)
+      navigator.share({ files: [lastFile] })
+        .then(function () { note('Shared.'); })
+        .catch(function (e) {
+          if (e && e.name === 'AbortError') { note(''); return; }
+          tryClipboard();
+        });
+      return;
+    }
+    tryClipboard();
+  }
+
+  function tryClipboard() {
+    if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+      try {
+        var item = new ClipboardItem({ 'image/png': Promise.resolve(lastBlob) });
+        navigator.clipboard.write([item])
+          .then(function () { note('Copied — paste it into the chat.'); })
+          .catch(function () { manual(); });
+        return;
+      } catch (e) { /* fall through */ }
+    }
+    manual();
+  }
+
+  function manual() {
+    note('Press and hold the image above to save it, then attach it in the chat.');
+  }
+
+  // ------------------------------------------------------- confirm / lock (§6)
+  function confirmCrop(storedCrop) {
+    if (confirmed) return;
+    // When restoring a confirmed day, render from the STORED normalized rect,
+    // never from the live view. The crop's aspect is always the frame's aspect,
+    // so a reload in the other orientation has a differently-shaped frame and
+    // re-deriving would quietly hand back a different image than the one the
+    // player confirmed. The stored rect is the record of truth (§5.2).
+    var c = storedCrop || computeCrop();
+    if (storedCrop) crop = storedCrop;
+    confirmed = true;
+    var cv = renderCrop(c);
+
+    toBlob(cv).then(function (b) {
+      lastBlob = b;
+      try { lastFile = new File([b], 'daily-crop-' + dayId + '.png', { type: 'image/png' }); }
+      catch (e) { lastFile = null; }
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = URL.createObjectURL(b);
+      $('resultImg').src = lastUrl;
+    }).catch(function (e) {
+      note('Could not produce an image: ' + e.message);
+      $('resultImg').src = cv.toDataURL('image/png');   // last-ditch, still viewable
+    });
+
+    // Restoring a previously-confirmed day must NOT append a second event or
+    // rewrite the record — otherwise every reload inflates the §9 data with
+    // phantom crops and resets the superseded flag.
+    if (!storedCrop) {
+      logCrop(c);
+      // Soft lock (chosen): the day is recorded and shared, but Redo stays
+      // available so a botched crop still yields data instead of a dead tester.
+      store.set('dc:crop:' + dayId + ':' + deviceId, {
+        crop: c, at: Date.now(), superseded: false
+      });
+    }
+    showResult(true);
+  }
+
+  function showResult(on) {
+    $('result').style.display = on ? 'flex' : 'none';
+    stage.style.display = on ? 'none' : '';
+    $('cropControls').style.display = on ? 'none' : 'flex';
+    if (!on) { note(''); sizeApp(); }
+  }
+
+  function redo() {
+    confirmed = false;
+    var k = 'dc:crop:' + dayId + ':' + deviceId;
+    var prev = store.get(k, null);
+    if (prev) { prev.superseded = true; store.set(k, prev); }
+    markSuperseded();
+    logged = false;
+    shownAt = performance.now();
+    showResult(false);
+  }
+
+  // --------------------------------------------------------- instrumentation
+  // §9 — without this the test produces vibes and screenshots.
+  function events() { return store.get('dc:events', []); }
+  function pushEvent(ev) {
+    var all = events();
+    all.push(ev);
+    if (all.length > 400) all = all.slice(-400);
+    store.set('dc:events', all);
+  }
+  function markSuperseded() {
+    var all = events();
+    for (var i = all.length - 1; i >= 0; i--) {
+      if (all[i].type === 'crop' && all[i].dayId === dayId && !all[i].superseded) {
+        all[i].superseded = true; break;
+      }
+    }
+    store.set('dc:events', all);
+  }
+  function logCrop(c) {
+    logged = true;
+    pushEvent({
+      type: 'crop', dayId: dayId, deviceId: deviceId,
+      x: +c.x.toFixed(6), y: +c.y.toFixed(6),
+      width: +c.width.toFixed(6), height: +c.height.toFixed(6),
+      areaFraction: +c.areaFraction.toFixed(6),
+      aspect: +c.aspect.toFixed(4),
+      zoom: +c.scale.toFixed(5),
+      zoomRel: +(c.scale / bounds.min).toFixed(4),
+      msToConfirm: Math.round(performance.now() - shownAt),
+      constraint: { aspect: CFG.aspect, areaPct: CFG.areaPct },
+      clockDay: clockDay, skew: clockSkew,
+      t: new Date().toISOString(), superseded: false
+    });
+  }
+  // pagehide, not beforeunload — iOS Safari does not fire beforeunload reliably.
+  function abandonCheck() {
+    if (logged || !shownAt) return;
+    logged = true;
+    pushEvent({
+      type: 'abandon', dayId: dayId, deviceId: deviceId,
+      msOnImage: Math.round(performance.now() - shownAt),
+      reachedZoom: crop ? +(crop.scale / bounds.min).toFixed(3) : null,
+      t: new Date().toISOString()
+    });
+  }
+  window.addEventListener('pagehide', abandonCheck);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') abandonCheck();
+  });
+
+  // ------------------------------------------------------------- dev panel (§8)
+  var devOpen = false, taps = 0, tapT = 0;
+
+  function devHTML() {
+    return '' +
+    '<div class="row" style="justify-content:space-between"><strong>Dev</strong>' +
+      '<button id="dvClose" class="ghost" style="min-height:40px">Close</button></div>' +
+
+    '<h3>Day</h3>' +
+    '<div class="row"><label>packed</label><span>' + DAY.id + '</span></div>' +
+    '<div class="row"><label>device clock</label><span class="' + (clockSkew ? 'warn' : '') + '">' +
+      clockDay + (clockSkew ? ' — skew' : '') + '</span></div>' +
+    '<div class="row"><label>day id</label><input type="date" id="dvDay" value="' + dayId + '"></div>' +
+    '<p class="note">One photo per build, so a wrong clock cannot show a different image than the ' +
+      'group chat — it only shifts the lock key and label.</p>' +
+
+    '<h3>Constraints</h3>' +
+    '<div class="row"><label>aspect</label><div class="seg" id="dvAspect">' +
+      ['source', '1', '1.3333', '1.5'].map(function (v) {
+        // compare numerically — String(4/3) is '1.3333333333333333', not '1.3333'
+        var on = (v === 'source')
+          ? CFG.aspect === 'source'
+          : (CFG.aspect !== 'source' && Math.abs(CFG.aspect - parseFloat(v)) < 0.01);
+        var lbl = { source: 'free', '1': '1:1', '1.3333': '4:3', '1.5': '3:2' }[v];
+        return '<button data-v="' + v + '" aria-pressed="' + on + '">' + lbl + '</button>';
+      }).join('') + '</div></div>' +
+    '<div class="row"><label>area %</label><input type="range" id="dvArea" min="0" max="100" step="1" value="' +
+      CFG.areaPct + '"><span id="dvAreaV">' + (CFG.areaPct || 'free') + '</span></div>' +
+    '<p class="note">Area &gt; 0 pins zoom exactly and overrides the output-resolution cap; ' +
+      'the cap then only warns. In the fixed-frame model &ldquo;free&rdquo; aspect means the ' +
+      'frame takes the source&rsquo;s ratio — it is never truly unconstrained. (§10.5)</p>' +
+
+    '<h3>Physics</h3>' +
+    '<div class="row"><label>friction</label><input type="range" id="dvFric" min="0.85" max="0.99" step="0.005" value="' + CFG.friction + '"><span id="dvFricV">' + CFG.friction + '</span></div>' +
+    '<div class="row"><label>rubber</label><input type="range" id="dvRub" min="40" max="500" step="10" value="' + CFG.rubber + '"><span id="dvRubV">' + CFG.rubber + '</span></div>' +
+    '<div class="row"><label>min out px</label><input type="range" id="dvOut" min="300" max="2000" step="50" value="' + CFG.minOutPx + '"><span id="dvOutV">' + CFG.minOutPx + '</span></div>' +
+
+    '<h3>Crop readout</h3><div id="readout" class="readout">—</div>' +
+
+    '<h3>State</h3>' +
+    '<div class="row seg">' +
+      '<button id="dvReset">Reset today</button>' +
+      '<button id="dvOverlay">Overlay crops</button>' +
+      '<button id="dvExport">Export JSON</button>' +
+    '</div>' +
+    '<div id="overlayWrap"><img id="overlayImg" alt=""><canvas id="overlayCv"></canvas></div>' +
+    '<p class="note" id="dvMsg"></p>' +
+
+    '<h3>Environment</h3>' +
+    '<div id="envout" class="readout">secureContext ' + window.isSecureContext +
+      '\nshare ' + (typeof navigator.share) +
+      '\nclipboard ' + (navigator.clipboard ? 'yes' : 'no') +
+      '\nClipboardItem ' + (typeof window.ClipboardItem) +
+      '\nstorage ' + (store.live ? 'localStorage' : 'memory only') +
+      '\nsource ' + DAY.w + '×' + DAY.h +
+      '\ndevice ' + deviceId.slice(0, 12) + '…</div>';
+  }
+
+  function paintReadout() {
+    var el = $('readout');
+    if (!el || !crop) return;
+    var sw = crop.width * DAY.w, sh = crop.height * DAY.h;
+    var warn = Math.min(sw, sh) < CFG.minOutPx;
+    el.textContent =
+      'x      ' + crop.x.toFixed(4) + '\n' +
+      'y      ' + crop.y.toFixed(4) + '\n' +
+      'w      ' + crop.width.toFixed(4) + '\n' +
+      'h      ' + crop.height.toFixed(4) + '\n' +
+      'area   ' + (crop.areaFraction * 100).toFixed(2) + '%\n' +
+      'aspect ' + crop.aspect.toFixed(3) + '\n' +
+      'zoom   ' + crop.scale.toFixed(4) + '  (' + (crop.scale / bounds.min).toFixed(2) + '× fit)\n' +
+      'output ' + Math.round(sw) + '×' + Math.round(sh) + (warn ? '  ⚠ below min' : '');
+  }
+
+  function openDev(on) {
+    devOpen = on;
+    var d = $('dev');
+    d.style.display = on ? 'block' : 'none';
+    if (!on) return;
+    d.innerHTML = devHTML();
+    paintReadout();
+
+    $('dvClose').onclick = function () { openDev(false); };
+
+    $('dvDay').onchange = function () {
+      if (!this.value) return;
+      dayId = this.value;
+      $('dayLabel').textContent = dayId;
+      confirmed = false; logged = false; showResult(false);
+    };
+
+    $('dvAspect').onclick = function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      var v = b.dataset.v;
+      CFG.aspect = (v === 'source') ? 'source' : parseFloat(v);
+      [].forEach.call(this.children, function (c) {
+        c.setAttribute('aria-pressed', c === b);
+      });
+      layout(); center();
+    };
+
+    function slider(id, vid, key, fmt) {
+      $(id).oninput = function () {
+        CFG[key] = parseFloat(this.value);
+        $(vid).textContent = fmt ? fmt(CFG[key]) : CFG[key];
+        if (key === 'areaPct' || key === 'minOutPx') { computeBounds(); layout(); center(); }
+        paintReadout();
+      };
+    }
+    slider('dvArea', 'dvAreaV', 'areaPct', function (v) { return v ? v + '%' : 'free'; });
+    slider('dvFric', 'dvFricV', 'friction');
+    slider('dvRub', 'dvRubV', 'rubber');
+    slider('dvOut', 'dvOutV', 'minOutPx');
+
+    $('dvReset').onclick = function () {
+      store.del('dc:crop:' + dayId + ':' + deviceId);
+      confirmed = false; logged = false; shownAt = performance.now();
+      showResult(false); center();
+      $('dvMsg').textContent = 'Cleared lock + crop for ' + dayId + '.';
+    };
+
+    $('dvExport').onclick = function () {
+      var json = JSON.stringify({ dayId: dayId, deviceId: deviceId, events: events() }, null, 2);
+      var done = function (ok) {
+        $('dvMsg').textContent = ok ? 'Copied ' + events().length + ' events.'
+                                    : 'Clipboard blocked — dumped to console.';
+        if (!ok) console.log(json);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(json).then(function () { done(true); },
+                                                 function () { done(false); });
+      } else done(false);
+    };
+
+    // §8 — informal preview of the comparison view, device-local only.
+    $('dvOverlay').onclick = function () {
+      var wrap = $('overlayWrap');
+      var on = wrap.style.display !== 'block';
+      wrap.style.display = on ? 'block' : 'none';
+      if (!on) return;
+      var img = $('overlayImg');
+      img.src = DAY.src;
+      var draw = function () {
+        var cv = $('overlayCv');
+        var w = img.clientWidth, h = img.clientHeight;
+        if (!w) return setTimeout(draw, 60);
+        cv.width = w; cv.height = h;
+        var g = cv.getContext('2d');
+        g.clearRect(0, 0, w, h);
+        var list = events().filter(function (e) { return e.type === 'crop' && e.dayId === dayId; });
+        list.forEach(function (e, i) {
+          g.strokeStyle = 'hsl(' + (i * 47 % 360) + ',90%,62%)';
+          g.lineWidth = 2;
+          g.strokeRect(e.x * w, e.y * h, e.width * w, e.height * h);
+        });
+        $('dvMsg').textContent = list.length + ' crop(s) on this device for ' + dayId + '.';
+      };
+      img.complete ? draw() : (img.onload = draw);
+    };
+  }
+
+  $('devHot').addEventListener('click', function () {
+    var t = Date.now();
+    taps = (t - tapT < 600) ? taps + 1 : 1;
+    tapT = t;
+    if (taps >= 5) { taps = 0; openDev(true); }
+  });
+
+  // ------------------------------------------------------------------- boot
+  $('confirmBtn').onclick = confirmCrop;
+  $('shareBtn').onclick = share;
+  $('redoBtn').onclick = redo;
+
+  $('dayLabel').textContent = dayId;
+
+  photo.addEventListener('load', function () {
+    photo.style.width = DAY.w + 'px';
+    photo.style.height = DAY.h + 'px';
+    sizeApp();
+    center();
+    shownAt = performance.now();
+
+    var prev = store.get('dc:crop:' + dayId + ':' + deviceId, null);
+    if (prev && prev.crop && !prev.superseded) {
+      // restore the confirmed state on reload; soft lock means Redo is still there
+      restore(prev.crop);
+    }
+  });
+
+  function restore(c) {
+    // Position the live view to approximate the stored crop, so that hitting
+    // Redo starts from where they left off. Scale comes from the crop's WIDTH,
+    // not the stored scale: stored scale was relative to the frame that existed
+    // at confirm time, and a different frame makes that number meaningless. The
+    // normalized rect is the device-independent record (§5.2).
+    //
+    // If the frame's aspect differs from the stored crop's, this view cannot
+    // reproduce that crop exactly — the frame's aspect always wins. That is why
+    // confirmCrop() is handed the stored rect to render from rather than
+    // re-deriving one from this view.
+    var s = frame.w / (c.width * DAY.w);
+    view.scale = clamp(s, bounds.min, bounds.max);
+    view.tx = frame.x - c.x * DAY.w * view.scale;
+    view.ty = frame.y - c.y * DAY.h * view.scale;
+    clampNow();
+    logged = true;
+    confirmCrop(c);
+  }
+
+  if (/[?&]dev=1/.test(location.search)) setTimeout(function () { openDev(true); }, 60);
+
+  photo.src = DAY.src;
+})();
+</script>
+</body>
+</html>

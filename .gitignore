@@ -12,3 +12,6 @@ photos/
 __pycache__/
 *.pyc
 .DS_Store
+
+# generated builds — photos must never enter main history
+dist/
