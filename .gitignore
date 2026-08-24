@@ -1,0 +1,14 @@
+# Source photos — originals stay local, only the packed base64 ships in index.html
+photos/
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.heic
+*.HEIC
+!docs/**/*.jpg
+
+# Local tooling noise
+__pycache__/
+*.pyc
+.DS_Store
