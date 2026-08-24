@@ -176,6 +176,28 @@ def main():
     if size > 6e6:
         print("  ! over 6 MB -- slow on mobile data. Try --quality 75 or --long-edge 2400.")
 
+    # §5.3 -- max zoom is derived from a minimum acceptable OUTPUT dimension, so
+    # a small source silently collapses the zoom range: the cap lands below
+    # fit-to-frame, app.html clamps max down to min, and the crop tool stops
+    # being able to crop. Catch that here rather than on a tester's phone.
+    MIN_OUT = 900          # keep in step with CFG.minOutPx in app.html
+    short = min(im.width, im.height)
+    if short < MIN_OUT * 1.5:
+        usable = short / float(MIN_OUT)
+        print("")
+        print("  ! SOURCE TOO SMALL -- short edge %dpx" % short)
+        if usable <= 1.0:
+            print("    Zoom will be DISABLED. The output cap (%dpx) sits below fit-to-frame,"
+                  % MIN_OUT)
+            print("    so there is no legal zoom range at all and the crop cannot move.")
+        else:
+            print("    Only ~%.1fx zoom available before the %dpx output floor."
+                  % (usable, MIN_OUT))
+        print("    §4 wants ~3000px on the long edge. Either use a bigger photo, or drop")
+        print("    'min out px' in the dev panel to ~%d to make this one testable"
+              % max(120, int(short / 2.5)))
+        print("    (shared output will be small and soft at that setting).")
+
 
 if __name__ == "__main__":
     main()
